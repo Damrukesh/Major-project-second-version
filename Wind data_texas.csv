@@ -1,4 +1,4 @@
-Time stamp,System power generated | (kW),Wind speed | (m/s),Wind direction | (deg),Pressure | (atm),Air temperature | ('C),windfarm power (MW)
+Timestamp,System power generated,Wind speed,Wind direction,Pressure,Air temperature,windfarm power
 "Jan 1, 12:00 am",1766.64,9.926,128,1.00048,18.263,688.92
 "Jan 1, 01:00 am",1433.83,9.273,135,0.99979,18.363,625.23
 "Jan 1, 02:00 am",1167.23,8.66,142,0.999592,18.663,488.56
