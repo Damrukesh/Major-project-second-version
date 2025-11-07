@@ -88,7 +88,7 @@ with col2:
         with prediction_placeholder.container():
             st.markdown("<div class='prediction-box'>", unsafe_allow_html=True)
             st.markdown("<div class='sub-header'>Predicted Demand</div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='prediction-value'>{prediction[0][0]:,.0f} MW</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='prediction-value'>{prediction:,.0f} MW</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
             
             # Add some metrics
@@ -121,7 +121,7 @@ try:
             Humidity=humids[i],
             Timestamp=future_times[i]
         )
-        predictions.append(pred[0][0])
+        predictions.append(float(pred))
     
     # Create a DataFrame for the forecast
     forecast_df = pd.DataFrame({

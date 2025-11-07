@@ -3,11 +3,10 @@ import pandas as pd
 import numpy as np
 import tensorflow as tf
 import joblib
-from sklearn.preprocessing import MinMaxScaler
 
-# ------------------------------------------------------------
-# Load Model and Scaler
-# ------------------------------------------------------------
+# ============================================================
+# LOAD MODEL AND SCALER
+# ============================================================
 @st.cache_resource
 def load_model_and_scaler():
     model = tf.keras.models.load_model("wind_forecast_model.keras", compile=False)
@@ -16,81 +15,82 @@ def load_model_and_scaler():
 
 model, scaler = load_model_and_scaler()
 
-# ------------------------------------------------------------
-# Streamlit UI
-# ------------------------------------------------------------
-st.title("💨 Wind Power Forecasting (Next 24 Hours)")
-st.write("Upload your latest **wind turbine data CSV** to forecast the next 24 hours of generated power.")
+# ============================================================
+# STREAMLIT UI
+# ============================================================
+st.title("💨 Wind Farm Power Prediction")
+st.write("Upload a CSV containing recent **wind condition data** to predict the expected windfarm power output (MW).")
 
 st.markdown("""
 **Expected CSV Columns:**  
-`Time stamp`, `System power generated(kW)`, `Wind speed(m/s)`, `Wind direction(deg)`, `Pressure(atm)`, `Air temperature 'C`, `windfarm power(MW)`
+`Timestamp`, `Wind_speed`, `Wind_direction`, `Pressure`, `Air_temperature`
 """)
 
-uploaded_file = st.file_uploader("📁 Upload your wind dataset", type=["csv"])
+uploaded_file = st.file_uploader("📂 Upload your wind feature CSV", type=["csv"])
 
 if uploaded_file:
     try:
         # ------------------------------------------------------------
-        # Load and preprocess
+        # Load and preprocess data
         # ------------------------------------------------------------
         df = pd.read_csv(uploaded_file)
         df.columns = df.columns.str.strip().str.replace(" ", "_").str.replace("(", "").str.replace(")", "")
-        df["Timestamp"] = pd.to_datetime(df["Time_stamp"], errors="coerce")
-        df = df.sort_values("Timestamp").reset_index(drop=True)
+        
+        # optional timestamp parsing
+        if "Timestamp" in df.columns:
+            df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+        else:
+            df["Timestamp"] = pd.date_range(start="2025-01-01", periods=len(df), freq="H")
 
         features = ["Wind_speed", "Wind_direction", "Pressure", "Air_temperature"]
-        target = "windfarm_power"
+        if not all(f in df.columns for f in features):
+            st.error(f"❌ Missing required columns. Found: {list(df.columns)}")
+            st.stop()
 
-        # Scale using previously fitted scaler
-        scaled = scaler.transform(df[features + [target]])
-        scaled_df = pd.DataFrame(scaled, columns=features + [target])
-
-        st.subheader("✅ Data loaded successfully!")
-        st.dataframe(df.head())
-
-        # ------------------------------------------------------------
-        # Forecast next 24 hours
-        # ------------------------------------------------------------
-        SEQ_LEN = 24
-        last_seq = scaled_df[features].values[-SEQ_LEN:]
-        X_input = np.expand_dims(last_seq, axis=0)
-
-        future_preds_scaled = []
-        input_seq = X_input.copy()
-
-        for _ in range(24):
-            next_pred = model.predict(input_seq)[0][0]
-            future_preds_scaled.append(next_pred)
-
-            next_row = input_seq[0, -1, :].copy()
-            input_seq = np.append(input_seq[:, 1:, :], [[next_row]], axis=1)
-
-        # Convert back to actual kW scale
-        max_kw = scaler.data_max_[-1]  # last feature is target
-        future_preds = np.array(future_preds_scaled) * max_kw
-
-        # Build forecast dataframe
-        future_timestamps = pd.date_range(df["Timestamp"].iloc[-1] + pd.Timedelta(hours=1),
-                                          periods=24, freq="H")
-        forecast_df = pd.DataFrame({"Timestamp": future_timestamps,
-                                    "Predicted_Power_kW": future_preds.flatten()})
+        # scale only features
+        scaled_features = scaler.transform(df[features])
+        scaled_features = np.expand_dims(scaled_features, axis=1) if len(scaled_features.shape) == 2 else scaled_features
 
         # ------------------------------------------------------------
-        # Display & download results
+        # Predict
         # ------------------------------------------------------------
-        st.subheader("🔮 24-Hour Forecast")
-        st.line_chart(forecast_df.set_index("Timestamp"))
-        st.dataframe(forecast_df)
+        X_input = np.expand_dims(scaled_features, axis=0) if len(scaled_features.shape) == 2 else scaled_features
+        preds_scaled = model.predict(X_input)
+        preds_scaled = preds_scaled.reshape(-1, 1)
 
-        csv = forecast_df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download Forecast CSV",
-                           data=csv,
-                           file_name="wind_forecast_24h.csv",
-                           mime="text/csv")
+        # inverse-transform to MW
+        dummy = np.zeros((preds_scaled.shape[0], len(features) + 1))
+        dummy[:, -1] = preds_scaled.flatten()
+        inv = scaler.inverse_transform(dummy)
+        preds_MW = inv[:, -1]
+
+        # ------------------------------------------------------------
+        # Display results
+        # ------------------------------------------------------------
+        result_df = pd.DataFrame({
+            "Timestamp": df["Timestamp"],
+            "Predicted_Windfarm_Power_MW": preds_MW.round(2)
+        })
+
+        st.subheader("🔮 Predicted Windfarm Power Output (MW)")
+        st.line_chart(result_df.set_index("Timestamp"))
+        st.dataframe(result_df)
+
+        # Download option
+        csv = result_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="⬇️ Download Predictions CSV",
+            data=csv,
+            file_name="predicted_windfarm_power.csv",
+            mime="text/csv"
+        )
 
     except Exception as e:
         st.error(f"❌ Error processing file: {e}")
+    st.write("📋 All columns in file:", list(df.columns))
+    st.write("🎯 Feature columns extracted:", features)
+    st.write("🧮 Shape of df[features]:", df[features].shape)
+    
 
 st.markdown("---")
 st.caption("Developed for Final Year Project — Wind Energy Forecasting & Carbon-Aware Management")
