@@ -1,0 +1,18 @@
+
+body { font-family: Inter, Arial, sans-serif; background: #0f1724; color: #e6eef8; margin:0; }
+.hero { padding:40px 20px; text-align:center; background: linear-gradient(90deg,#072540,#063046); }
+.hero.small { padding:24px; }
+.container { max-width:1000px; margin:30px auto; padding:20px; background: rgba(255,255,255,0.02); border-radius:8px; }
+.file-row { margin-bottom:12px; }
+label { display:block; margin-bottom:6px; color:#bcd2e6; }
+input[type=file] { color:#000; }
+.btn { background:#0ea5a4; color:#012; padding:10px 16px; text-decoration:none; border-radius:6px; margin-right:8px; display:inline-block; }
+.btn.primary { background:#06b6d4; }
+.actions { margin-top:20px; }
+.results-table { width:100%; border-collapse:collapse; }
+.results-table th, .results-table td { border-bottom:1px solid rgba(255,255,255,0.06); padding:8px 6px; text-align:center; }
+.footer { text-align:center; padding:12px; color:#9fb6cd; margin-top:30px; }
+.flashes { list-style:none; padding:0; }
+.flash { padding:10px; margin-bottom:6px; border-radius:6px; }
+.flash.danger { background:#7f1d1d; }
+.flash.warning { background:#7a4b00; }

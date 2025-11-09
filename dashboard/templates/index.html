@@ -1,0 +1,41 @@
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Wind Forecast Dashboard - Upload</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body>
+    <div class="hero">
+      <h1>Wind & Demand Forecasting Dashboard</h1>
+      <p>Upload 24-hour CSV files for Wind and Demand (past 24 hours) to forecast the next 24 hours.</p>
+    </div>
+    <main class="container">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <ul class="flashes">
+          {% for category, message in messages %}
+            <li class="flash {{ category }}">{{ message }}</li>
+          {% endfor %}
+          </ul>
+        {% endif %}
+      {% endwith %}
+      <form action="{{ url_for('predict') }}" method="post" enctype="multipart/form-data">
+        <div class="file-row">
+          <label>Upload Wind CSV (24+ rows)</label>
+          <input type="file" name="wind_csv" accept=".csv" required>
+        </div>
+        <div class="file-row">
+          <label>Upload Demand CSV (24+ rows)</label>
+          <input type="file" name="demand_csv" accept=".csv" required>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn primary">Upload & Predict</button>
+        </div>
+      </form>
+    </main>
+    <footer class="footer">Built for FYP - Wind Energy Management</footer>
+  </body>
+</html>

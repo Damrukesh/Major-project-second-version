@@ -1,0 +1,65 @@
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Analysis & Carbon Savings</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <div class="hero small">
+      <h1>Analysis & Carbon Savings</h1>
+    </div>
+    <main class="container">
+      <section class="charts">
+        <canvas id="chartFossil" height="120"></canvas>
+      </section>
+
+      <section class="summary">
+        <h3>Energy & Carbon Summary</h3>
+        <p>Total energy saved (MWh): <strong>{{ total_energy_saved_mwh }}</strong></p>
+        <p>Estimated CO₂ avoided (kg): <strong>{{ co2_saved_kg }}</strong></p>
+        <p>Estimated RECs earned (MWh): <strong>{{ recs }}</strong></p>
+      </section>
+
+      <div class="actions">
+        <a class="btn" href="{{ url_for('download_results') }}">Download Results (JSON)</a>
+        <a class="btn" href="{{ url_for('index') }}">New Prediction</a>
+      </div>
+    </main>
+
+    <script>
+    const f1 = {{ f1|tojson }};
+    const f2 = {{ f2|tojson }};
+    const labels = Array.from({length: f1.length}, (_,i) => i+1);
+
+    const ctx = document.getElementById('chartFossil').getContext('2d');
+    const chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Historical Fossil (f1)',
+                data: f1,
+                borderColor: 'rgba(255,99,132,0.9)',
+                tension: 0.2,
+                fill: false
+            },
+            {
+                label: 'Forecast-based Fossil (f2)',
+                data: f2,
+                borderColor: 'rgba(54,162,235,0.9)',
+                tension: 0.2,
+                fill: false
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'top' } },
+            scales: { y: { beginAtZero: false } }
+        }
+    });
+    </script>
+  </body>
+</html>
