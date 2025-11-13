@@ -5,32 +5,188 @@
     <meta charset="utf-8">
     <title>Forecast Results</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+      .energy-source {
+        margin: 20px 0;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      }
+      .energy-source h3 {
+        margin-top: 0;
+        color: #2c3e50;
+        border-bottom: 1px solid #dee2e6;
+        padding-bottom: 10px;
+      }
+      .summary-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 15px;
+        margin: 20px 0;
+      }
+      .summary-card {
+        background: white;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        text-align: center;
+      }
+      .summary-card h4 {
+        margin: 0 0 10px 0;
+        color: #495057;
+        font-size: 0.9rem;
+      }
+      .summary-card .value {
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #2c3e50;
+      }
+      .summary-card .unit {
+        font-size: 0.8rem;
+        color: #6c757d;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 20px 0;
+      }
+      th, td {
+        padding: 12px 15px;
+        text-align: left;
+        border-bottom: 1px solid #dee2e6;
+        color: #2c3e50;
+      }
+      th {
+        background-color: #f8f9fa;
+        font-weight: 600;
+        color: #495057;
+      }
+      tr:hover {
+        background-color: #f8f9fa;
+      }
+      td:nth-child(2) {
+        font-weight: 500;
+        color: #495057;
+      }
+      .positive {
+        color: #28a745;
+      }
+      .negative {
+        color: #dc3545;
+      }
+      .actions {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 30px;
+      }
+      .btn {
+        display: inline-block;
+        padding: 10px 20px;
+        background-color: #3498db;
+        color: white;
+        text-decoration: none;
+        border-radius: 4px;
+        transition: background-color 0.3s;
+      }
+      .btn:hover {
+        background-color: #2980b9;
+      }
+      .btn-secondary {
+        background-color: #6c757d;
+      }
+      .btn-secondary:hover {
+        background-color: #5a6268;
+      }
+    </style>
   </head>
   <body>
     <div class="hero small">
-      <h1>Forecast Results (Next 24 Hours)</h1>
+      <h1>24-Hour Energy Forecast</h1>
+      <p>Forecast generated on {{ results[0].timestamp if results and 'timestamp' in results[0] else 'N/A' }}</p>
     </div>
+    
     <main class="container">
-      <table class="results-table">
-        <thead>
-          <tr><th>Hour</th><th>Predicted Wind (MW)</th><th>Predicted Demand (MW)</th><th>Fossil Needed (MW)</th></tr>
-        </thead>
-        <tbody>
-          {% for r in results %}
-            <tr>
-              <td>{{ r.hour }}</td>
-              <td>{{ r.wind_mw }}</td>
-              <td>{{ r.demand_mw }}</td>
-              <td>{{ r.fossil_needed_mw }}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <!-- Summary Cards -->
+      <div class="summary-cards">
+        <div class="summary-card">
+          <h4>Average Demand</h4>
+          <div class="value">{{ "%.2f"|format((results|sum(attribute='demand_mw') / results|length) if results else 0) }}</div>
+          <div class="unit">MW</div>
+        </div>
+        <div class="summary-card">
+          <h4>Average Wind Power</h4>
+          <div class="value">{{ "%.2f"|format((results|sum(attribute='wind_mw') / results|length) if results else 0) }}</div>
+          <div class="unit">MW</div>
+        </div>
+        <div class="summary-card">
+          <h4>Fossil Fuel Needed</h4>
+          <div class="value">{{ "%.2f"|format((results|sum(attribute='fossil_needed_mw') / results|length) if results else 0) }}</div>
+          <div class="unit">MW (avg)</div>
+        </div>
+        <div class="summary-card">
+          <h4>Renewable Share</h4>
+          <div class="value">{{ "%.1f"|format((((results|sum(attribute='wind_mw')) + (results|sum(attribute='solar_mw') if results and results|first is defined and 'solar_mw' in results|first else 0) + (results|sum(attribute='hydro_mw') if results and results|first is defined and 'hydro_mw' in results|first else 0)) / (results|sum(attribute='demand_mw')) * 100) if results and results|sum(attribute='demand_mw') > 0 else 0) }}%</div>
+          <div class="unit">of total demand</div>
+        </div>
+      </div>
+
+      <!-- Detailed Table -->
+      <div class="energy-source">
+        <h3>Hourly Forecast Details</h3>
+        <div class="table-responsive">
+          <table class="results-table">
+            <thead>
+              <tr>
+                <th>Hour</th>
+                <th>Timestamp</th>
+                <th>Demand (MW)</th>
+                <th>Wind (MW)</th>
+                <th>Solar (MW)</th>
+                <th>Hydro (MW)</th>
+                <th>Nuclear (MW)</th>
+                <th>Fossil Needed (MW)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in results %}
+                <tr>
+                  <td>{{ r.hour }}</td>
+                  <td>{{ r.timestamp if 'timestamp' in r else 'N/A' }}</td>
+                  <td>{{ "%.2f"|format(r.demand_mw) }}</td>
+                  <td class="positive">{{ "%.2f"|format(r.wind_mw) }}</td>
+                  <td class="positive">{{ "%.2f"|format(r.get('solar_mw', 0)) }}</td>
+                  <td class="positive">{{ "%.2f"|format(r.get('hydro_mw', 0)) }}</td>
+                  <td class="positive">{{ "%.2f"|format(r.get('nuclear_mw', 0)) }}</td>
+                  <td class="negative">{{ "%.2f"|format(r.fossil_needed_mw) }}</td>
+                </tr>
+              {% else %}
+                <tr>
+                  <td colspan="8" style="text-align: center;">No forecast data available. Please run a prediction first.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="actions">
-        <a class="btn" href="{{ url_for('analysis') }}">Analyze Carbon Savings & Show Graphs</a>
-        <a class="btn" href="{{ url_for('index') }}">Back</a>
+        <a class="btn" href="{{ url_for('analysis') }}">
+          View Detailed Analysis & Graphs →
+        </a>
+        <div>
+          <a class="btn btn-secondary" href="{{ url_for('download_results') }}" style="margin-right: 10px;">
+            Download Results
+          </a>
+          <a class="btn btn-secondary" href="{{ url_for('index') }}">
+            Back to Upload
+          </a>
+        </div>
       </div>
     </main>
-    <footer class="footer">Results generated by models / fallback predictor</footer>
+    
+    <footer class="footer">
+      Forecast generated using integrated wind and demand models. Data as of {{ results[0].timestamp if results and 'timestamp' in results[0] else 'N/A' }}
+    </footer>
   </body>
 </html>

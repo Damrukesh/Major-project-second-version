@@ -1,8 +1,13 @@
-
-from flask import Flask, render_template, request, redirect, url_for, send_file, flash
-import os, io, joblib, numpy as np, pandas as pd, json
+from flask import Flask, render_template, request, redirect, url_for, send_file, flash, jsonify
+import os, joblib, numpy as np, pandas as pd, json, pickle, sys
+from datetime import datetime, timedelta
 import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler
+import xgboost as xgb
+
+# Add parent directory to Python path to import demand_predict_helper
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from demand_predict_helper import predict_demand  # Import the demand prediction function
 
 app = Flask(__name__)
 app.secret_key = "dev-secret-key"  # change for production
@@ -10,6 +15,17 @@ app.secret_key = "dev-secret-key"  # change for production
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 MODELS_FOLDER = os.path.join(BASE_DIR, "models")
+DATA_FOLDER = os.path.join(os.path.dirname(BASE_DIR), "datasets")
+
+# Load Texas energy portfolio data
+def load_texas_energy_data():
+    try:
+        texas_data = pd.read_csv(os.path.join(DATA_FOLDER, "texas_energy_portfolio.csv"))
+        texas_data['Timestamp'] = pd.to_datetime(texas_data['Timestamp'])
+        return texas_data
+    except Exception as e:
+        print(f"Error loading Texas energy data: {e}")
+        return None
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -36,10 +52,12 @@ def predict():
     # Expect two files: wind_csv and demand_csv
     wind_file = request.files.get("wind_csv")
     demand_file = request.files.get("demand_csv")
+    
     if not wind_file or not demand_file:
         flash("Please upload both Wind and Demand CSV files.", "danger")
         return redirect(url_for("index"))
 
+    # Save uploaded files
     wind_path = os.path.join(UPLOAD_FOLDER, "uploaded_wind.csv")
     demand_path = os.path.join(UPLOAD_FOLDER, "uploaded_demand.csv")
     wind_file.save(wind_path)
@@ -56,99 +74,186 @@ def predict():
     # Basic column normalization: replace spaces with underscores and lowercase
     wind_df.columns = [c.strip().replace(" ", "_").lower() for c in wind_df.columns]
     demand_df.columns = [c.strip().replace(" ", "_").lower() for c in demand_df.columns]
+    
+    # Log the columns for debugging
+    print(f"Wind CSV columns: {list(wind_df.columns)}")
+    print(f"Demand CSV columns: {list(demand_df.columns)}")
+    print(f"Wind CSV shape: {wind_df.shape}")
+    print(f"Demand CSV shape: {demand_df.shape}")
 
     # Ensure there are at least 24 rows for inference
     if len(wind_df) < 24 or len(demand_df) < 24:
         flash("Each uploaded CSV must contain at least 24 hourly records (past 24 hours).", "danger")
         return redirect(url_for("index"))
 
-    # Try to load models & scalers if present
-    wind_model = None
-    demand_model = None
-    wind_scaler = None
-    demand_scaler = None
-
-    wind_model_path = os.path.join(MODELS_FOLDER, "wind_forecast_model.keras")
-    demand_model_path = os.path.join(MODELS_FOLDER, "demand_forecast_model.keras")
-    wind_scaler_path = os.path.join(MODELS_FOLDER, "wind_scaler.pkl")
-    demand_scaler_path = os.path.join(MODELS_FOLDER, "demand_scaler.pkl")
-
-    if os.path.exists(wind_model_path):
-        wind_model = load_keras_model(wind_model_path)
-    if os.path.exists(demand_model_path):
-        demand_model = load_keras_model(demand_model_path)
-    if os.path.exists(wind_scaler_path):
-        try:
-            wind_scaler = joblib.load(wind_scaler_path)
-        except: wind_scaler = None
-    if os.path.exists(demand_scaler_path):
-        try:
-            demand_scaler = joblib.load(demand_scaler_path)
-        except: demand_scaler = None
-
-    # Determine target column names heuristically
-    def pick_target(df, candidates):
-        cols = df.columns.tolist()
-        for c in candidates:
-            if c in cols:
-                return c
-        return cols[-1]  # fallback to last column
-
-    wind_target = pick_target(wind_df, ["windfarm_power", "windfarm_power_mw", "system_power_generated", "system_power_generated_kw", "power"])
-    demand_target = pick_target(demand_df, ["demand", "total_demand_mw", "load", "system_load", "demand_mw"])
-
-    # If models available, use them; else fallback
-    steps = 24
-
-    # WIND prediction
-    if wind_model is not None and wind_scaler is not None:
-        try:
-            # select numeric features (last 24 rows)
-            Xw = wind_df.select_dtypes(include=[float, int]).iloc[-24:]
-            # scale - assume scaler fit on same column order; otherwise fallback
-            Xw_scaled = wind_scaler.transform(Xw)
-            Xw_seq = Xw_scaled.reshape(1, Xw_scaled.shape[0], Xw_scaled.shape[1])
-            preds_w_scaled = wind_model.predict(Xw_seq)[0]
-            # inverse transform target: assume scaler had target as last col
-            # If scaler has attributes, try to invert robustly
-            # Here we assume target was the last column of scaler input
-            max_target = wind_scaler.data_max_[-1] if hasattr(wind_scaler, "data_max_") else Xw.values[:, -1].max()
-            preds_w = np.array(preds_w_scaled).reshape(-1,1) * max_target
-            wind_forecast = [float(x) for x in preds_w.flatten()]
-        except Exception as e:
-            print("Wind model predict error:", e)
-            wind_forecast = fallback_predict_series(wind_df[wind_target], steps=steps)
-    else:
-        wind_forecast = fallback_predict_series(wind_df[wind_target], steps=steps)
-
-    # DEMAND prediction
-    if demand_model is not None and demand_scaler is not None:
-        try:
-            Xd = demand_df.select_dtypes(include=[float, int]).iloc[-24:]
-            Xd_scaled = demand_scaler.transform(Xd)
-            Xd_seq = Xd_scaled.reshape(1, Xd_scaled.shape[0], Xd_scaled.shape[1])
-            preds_d_scaled = demand_model.predict(Xd_seq)[0]
-            max_target_d = demand_scaler.data_max_[-1] if hasattr(demand_scaler, "data_max_") else Xd.values[:, -1].max()
-            preds_d = np.array(preds_d_scaled).reshape(-1,1) * max_target_d
-            demand_forecast = [float(x) for x in preds_d.flatten()]
-        except Exception as e:
-            print("Demand model predict error:", e)
-            demand_forecast = fallback_predict_series(demand_df[demand_target], steps=steps)
-    else:
-        demand_forecast = fallback_predict_series(demand_df[demand_target], steps=steps)
-
-    # Build results table
-    hours = list(range(1, steps+1))
-    fossil_needed = [max(0, d - w) for d,w in zip(demand_forecast, wind_forecast)]
-
+    # Load Texas energy portfolio data
+    texas_data = load_texas_energy_data()
+    if texas_data is None:
+        flash("Error loading Texas energy portfolio data. Using fallback predictions.", "warning")
+    
+    # Get the latest timestamp from the data to align with forecast
+    # For testing with 2024 data, use 2024-01-01 as the forecast start
+    forecast_start_time = datetime(2024, 1, 1, 0, 0, 0)
+    if texas_data is not None and not texas_data.empty:
+        # Use the first timestamp from the dataset for testing
+        forecast_start_time = texas_data['Timestamp'].min()
+    
+    # Generate timestamps for the forecast period
+    forecast_hours = 24
+    forecast_timestamps = [forecast_start_time + timedelta(hours=i) for i in range(forecast_hours)]
+    
+    # Initialize forecast results
     results = []
-    for h, w, d, f in zip(hours, wind_forecast, demand_forecast, fossil_needed):
-        results.append({"hour": h, "wind_mw": round(w,2), "demand_mw": round(d,2), "fossil_needed_mw": round(f,2)})
-
+    
+    # 1. WIND PREDICTION
+    try:
+        # Load wind model and scaler
+        wind_model_path = os.path.join(os.path.dirname(BASE_DIR), "wind forecast", "wind_forecast_model.pkl")
+        wind_scaler_path = os.path.join(os.path.dirname(BASE_DIR), "wind forecast", "scaler.pkl")
+        
+        if os.path.exists(wind_model_path) and os.path.exists(wind_scaler_path):
+            with open(wind_model_path, 'rb') as f:
+                wind_model = pickle.load(f)
+            with open(wind_scaler_path, 'rb') as f:
+                wind_scaler = pickle.load(f)
+            
+            # Prepare input features for wind prediction
+            # The wind model expects columns: wind_speed, wind_direction, pressure, air_temperature
+            required_wind_cols = ['wind_speed', 'wind_direction', 'pressure', 'air_temperature']
+            
+            # Check if all required columns exist
+            if all(col in wind_df.columns for col in required_wind_cols):
+                # Get all 24 rows for prediction (use last 24 hours of data)
+                wind_input = wind_df[required_wind_cols].iloc[-24:].values
+                
+                # If we have less than 24 rows, repeat the last row
+                if len(wind_input) < 24:
+                    last_row = wind_input[-1]
+                    wind_input = np.vstack([wind_input] + [last_row] * (24 - len(wind_input)))
+                
+                # Scale features
+                wind_input_scaled = wind_scaler.transform(wind_input)
+                
+                # Predict wind power for each of the 24 hours
+                wind_predictions = wind_model.predict(wind_input_scaled)
+                wind_forecast = [float(x) for x in wind_predictions.flatten()[:forecast_hours]]
+                
+                print(f"Wind predictions: min={min(wind_forecast):.2f}, max={max(wind_forecast):.2f}, avg={sum(wind_forecast)/len(wind_forecast):.2f}")
+            else:
+                missing = [col for col in required_wind_cols if col not in wind_df.columns]
+                print(f"Missing wind columns: {missing}")
+                raise ValueError(f"Missing required wind columns: {missing}")
+        else:
+            # Fallback: Use the last available wind value
+            last_wind = wind_df.iloc[-1]['wind_speed'] if 'wind_speed' in wind_df.columns else 100
+            wind_forecast = [float(last_wind)] * forecast_hours
+            
+    except Exception as e:
+        print(f"Wind prediction error: {e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback: Use a default value
+        wind_forecast = [100.0] * forecast_hours
+    
+    # 2. DEMAND PREDICTION
+    try:
+        # Prepare input for demand prediction
+        # Assuming the demand CSV has columns: temperature, humidity, timestamp
+        if 'temperature' in demand_df.columns and 'humidity' in demand_df.columns:
+            # Use the last row for prediction (most recent data)
+            last_row = demand_df.iloc[-1]
+            temp = float(last_row['temperature'])
+            humidity = float(last_row['humidity'])
+            
+            # Generate demand predictions for the next 24 hours
+            demand_forecast = []
+            for i in range(forecast_hours):
+                # Adjust temperature slightly for each hour (optional)
+                # This simulates temperature changes throughout the day
+                hour_of_day = (forecast_start_time.hour + i) % 24
+                temp_adjusted = temp + 5 * np.sin(hour_of_day * np.pi / 12)  # Vary temp by ±5°C
+                
+                # Call the demand prediction function
+                try:
+                    # Provide absolute paths to model files in parent directory
+                    parent_dir = os.path.dirname(BASE_DIR)
+                    pred = predict_demand(
+                        Temperature=temp_adjusted,
+                        Humidity=humidity,
+                        Timestamp=forecast_timestamps[i],
+                        model_path=os.path.join(parent_dir, 'demand_forecast_xgboost.pkl'),
+                        feature_scaler_path=os.path.join(parent_dir, 'demand_feature_scaler_xgb.pkl'),
+                        target_scaler_path=os.path.join(parent_dir, 'demand_target_scaler_xgb.pkl'),
+                        year_params_path=os.path.join(parent_dir, 'demand_year_params.json')
+                    )
+                    demand_forecast.append(float(pred))
+                    if i == 0:  # Log first prediction
+                        print(f"First demand prediction: {pred} for temp={temp_adjusted}, humidity={humidity}")
+                except Exception as pred_error:
+                    # Fallback if prediction fails
+                    print(f"Demand prediction failed for hour {i}: {pred_error}")
+                    demand_forecast.append(5000.0)  # Default value
+        else:
+            # Fallback: Use the last available demand value or a default
+            last_demand = demand_df.iloc[-1].iloc[-1] if not demand_df.empty else 5000.0
+            demand_forecast = [float(last_demand)] * forecast_hours
+            
+    except Exception as e:
+        print(f"Demand prediction error: {e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback: Use a default value
+        demand_forecast = [5000.0] * forecast_hours
+    
+    # 3. CALCULATE FOSSIL FUEL NEEDED AND PREPARE RESULTS
+    results = []
+    
+    for i in range(forecast_hours):
+        # Get forecasted wind and demand
+        wind = wind_forecast[i]
+        demand = demand_forecast[i]
+        
+        # Get other renewables from Texas data if available
+        solar = 0.0
+        hydro = 0.0
+        nuclear = 0.0
+        
+        if texas_data is not None and not texas_data.empty:
+            # Get the same hour from historical data (e.g., same hour of the day)
+            hour_of_day = forecast_timestamps[i].hour
+            historical_data = texas_data[texas_data['Timestamp'].dt.hour == hour_of_day]
+            
+            if not historical_data.empty:
+                # Use median values for the hour
+                solar = historical_data['Solar_MW'].median() if 'Solar_MW' in historical_data.columns else 0.0
+                hydro = historical_data['Hydro_MW'].median() if 'Hydro_MW' in historical_data.columns else 0.0
+                nuclear = historical_data['Nuclear_MW'].median() if 'Nuclear_MW' in historical_data.columns else 0.0
+        
+        # Calculate fossil fuel needed
+        # Nuclear is NOT subtracted because it's non-renewable
+        # Only renewable sources (wind, solar, hydro) are subtracted from demand
+        fossil = max(0, demand - wind - solar - hydro)
+        
+        # Append result for this hour
+        results.append({
+            "hour": i + 1,
+            "timestamp": forecast_timestamps[i].strftime("%Y-%m-%d %H:%M"),
+            "wind_mw": round(wind, 2),
+            "demand_mw": round(demand, 2),
+            "solar_mw": round(solar, 2),
+            "hydro_mw": round(hydro, 2),
+            "nuclear_mw": round(nuclear, 2),
+            "fossil_needed_mw": round(fossil, 2)
+        })
+    
     # Save results temporarily as JSON for analysis page
     out_json_path = os.path.join(UPLOAD_FOLDER, "latest_results.json")
     with open(out_json_path, "w") as fh:
-        json.dump({"results": results}, fh)
+        json.dump({
+            "results": results,
+            "forecast_start": forecast_start_time.isoformat(),
+            "forecast_end": forecast_timestamps[-1].isoformat()
+        }, fh, default=str)
 
     return render_template("results.html", results=results)
 
@@ -158,35 +263,88 @@ def analysis():
     if not os.path.exists(out_json_path):
         flash("No results available. Please upload CSVs and run prediction first.", "warning")
         return redirect(url_for("index"))
+    
     with open(out_json_path) as fh:
         data = json.load(fh)
+    
     results = data["results"]
-
-    # Build time series for plotting f1 (historical fossil) and f2 (after forecast)
-    # Load historical dataset if present at models/historical_energy_mix_2024.csv, else synthesize
-    hist_path = os.path.join(MODELS_FOLDER, "historical_energy_mix_2024.csv")
-    if os.path.exists(hist_path):
-        hist_df = pd.read_csv(hist_path)
-        # try to use last 24 fossil values
-        if "Fossil_MW" in hist_df.columns:
-            f1 = list(hist_df["Fossil_MW"].iloc[-24:].round(2))
+    forecast_start = datetime.fromisoformat(data.get("forecast_start")) if "forecast_start" in data else None
+    
+    # Get actual non-renewable energy (Fossil + Nuclear) from Texas energy portfolio for the SAME timestamps
+    texas_data = load_texas_energy_data()
+    
+    if texas_data is not None and forecast_start:
+        # Get the actual non-renewable energy usage for the same 24-hour period we're forecasting
+        forecast_end = forecast_start + timedelta(hours=23)
+        actual_data = texas_data[
+            (texas_data['Timestamp'] >= forecast_start) & 
+            (texas_data['Timestamp'] <= forecast_end)
+        ]
+        
+        if not actual_data.empty and len(actual_data) >= 24:
+            # Use actual non-renewable energy (Fossil + Nuclear) for comparison
+            actual_data = actual_data.iloc[:24]
+            # Historical non-renewable = Fossil + Nuclear (both are non-renewable)
+            f1 = (actual_data['Fossil_MW'] + actual_data['Nuclear_MW']).tolist()
+            print(f"Using actual non-renewable (Fossil+Nuclear) data: {len(f1)} hours, avg={sum(f1)/len(f1):.2f} MW")
         else:
-            f1 = [float(x["fossil_needed_mw"]) for x in results]  # fallback
+            # If not enough data, use a baseline from the dataset
+            # Use the average non-renewable energy for each hour of the day from the entire dataset
+            f1 = []
+            for i in range(24):
+                hour_data = texas_data[texas_data['Timestamp'].dt.hour == i]
+                if not hour_data.empty:
+                    # Average of Fossil + Nuclear for this hour
+                    f1.append((hour_data['Fossil_MW'] + hour_data['Nuclear_MW']).mean())
+                else:
+                    f1.append(4500.0)  # Default baseline
+            print(f"Using average hourly non-renewable baseline from dataset")
     else:
-        # synthesize simple baseline from results mean
-        avg = np.mean([r["fossil_needed_mw"] for r in results])
-        f1 = [round(avg * (1 + 0.05*np.sin(i/3)),2) for i in range(24)]
-
-    f2 = [r["fossil_needed_mw"] for r in results]
-
-    # energy saved per hour (MWh) = f1 - f2 (in MW for 1 hour = MWh)
-    energy_saved = [max(0, round(a - b,2)) for a,b in zip(f1,f2)]
-    total_energy_saved_mwh = round(sum(energy_saved),2)
-    co2_saved_kg = round(total_energy_saved_mwh * 1000 * 0.95,2)
-    recs = round(total_energy_saved_mwh,2)
-
-    return render_template("analysis.html", f1=f1, f2=f2, energy_saved=energy_saved,
-                           total_energy_saved_mwh=total_energy_saved_mwh, co2_saved_kg=co2_saved_kg, recs=recs)
+        # Fallback: Use a baseline from the dataset
+        if texas_data is not None:
+            f1 = [(texas_data['Fossil_MW'] + texas_data['Nuclear_MW']).mean()] * 24
+        else:
+            f1 = [4500.0] * 24
+    
+    # Get the forecasted non-renewable energy (Fossil + Nuclear)
+    # Since we're comparing with historical non-renewable (Fossil + Nuclear), 
+    # we need to add nuclear to the forecasted fossil fuel
+    f2 = [r["fossil_needed_mw"] + r.get("nuclear_mw", 0) for r in results]
+    
+    # Calculate energy savings (difference between historical and forecasted non-renewable energy usage)
+    energy_saved = [max(0, round(a - b, 2)) for a, b in zip(f1, f2)]
+    total_energy_saved_mwh = round(sum(energy_saved), 2)
+    
+    # Calculate CO2 savings (assuming 0.95 kg CO2 per kWh from fossil fuels)
+    co2_saved_kg = round(total_energy_saved_mwh * 1000 * 0.95, 2)
+    
+    # Calculate RECs (1 REC per MWh of renewable energy used)
+    # For simplicity, we'll assume the difference in fossil fuel usage is due to increased renewables
+    recs = round(total_energy_saved_mwh, 2)
+    
+    # Prepare data for the chart
+    timestamps = [r["timestamp"] for r in results] if "timestamp" in results[0] else list(range(1, 25))
+    
+    # Get other energy sources for the stacked area chart
+    wind_forecast = [r["wind_mw"] for r in results]
+    solar_forecast = [r.get("solar_mw", 0) for r in results]
+    hydro_forecast = [r.get("hydro_mw", 0) for r in results]
+    nuclear_forecast = [r.get("nuclear_mw", 0) for r in results]
+    
+    return render_template(
+        "analysis.html",
+        timestamps=timestamps,
+        f1=f1,
+        f2=f2,
+        wind_forecast=wind_forecast,
+        solar_forecast=solar_forecast,
+        hydro_forecast=hydro_forecast,
+        nuclear_forecast=nuclear_forecast,
+        energy_saved=energy_saved,
+        total_energy_saved_mwh=total_energy_saved_mwh,
+        co2_saved_kg=co2_saved_kg,
+        recs=recs
+    )
 
 @app.route("/download_results")
 def download_results():

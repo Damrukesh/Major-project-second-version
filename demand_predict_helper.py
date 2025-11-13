@@ -10,7 +10,8 @@ import xgboost as xgb
 
 def predict_demand(Temperature, Humidity, Timestamp, model_path='demand_forecast_xgboost.pkl', 
                    feature_scaler_path='demand_feature_scaler_xgb.pkl',
-                   target_scaler_path='demand_target_scaler_xgb.pkl'):
+                   target_scaler_path='demand_target_scaler_xgb.pkl',
+                   year_params_path='demand_year_params.json'):
     """
     Predict electricity demand in MW (original scale).
     
@@ -77,7 +78,6 @@ def predict_demand(Temperature, Humidity, Timestamp, model_path='demand_forecast
     # Normalize year using saved parameters from training
     import os
     import json
-    year_params_path = 'demand_year_params.json'
     if os.path.exists(year_params_path):
         with open(year_params_path, 'r') as f:
             year_params = json.load(f)
