@@ -49,26 +49,79 @@ def index():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    # Expect two files: wind_csv and demand_csv
-    wind_file = request.files.get("wind_csv")
-    demand_file = request.files.get("demand_csv")
+    input_type = request.form.get('input_type', 'csv')
     
-    if not wind_file or not demand_file:
-        flash("Please upload both Wind and Demand CSV files.", "danger")
-        return redirect(url_for("index"))
+    if input_type == 'csv':
+        # Handle CSV file upload
+        wind_file = request.files.get("wind_csv")
+        demand_file = request.files.get("demand_csv")
+        
+        if not wind_file or not demand_file:
+            flash("Please upload both Wind and Demand CSV files.", "danger")
+            return redirect(url_for("index"))
 
-    # Save uploaded files
-    wind_path = os.path.join(UPLOAD_FOLDER, "uploaded_wind.csv")
-    demand_path = os.path.join(UPLOAD_FOLDER, "uploaded_demand.csv")
-    wind_file.save(wind_path)
-    demand_file.save(demand_path)
+        # Save uploaded files
+        wind_path = os.path.join(UPLOAD_FOLDER, "uploaded_wind.csv")
+        demand_path = os.path.join(UPLOAD_FOLDER, "uploaded_demand.csv")
+        wind_file.save(wind_path)
+        demand_file.save(demand_path)
 
-    # Load as DataFrames (robust parsing)
-    try:
-        wind_df = pd.read_csv(wind_path)
-        demand_df = pd.read_csv(demand_path)
-    except Exception as e:
-        flash(f"Error reading CSVs: {e}", "danger")
+        # Load as DataFrames (robust parsing)
+        try:
+            wind_df = pd.read_csv(wind_path)
+            demand_df = pd.read_csv(demand_path)
+        except Exception as e:
+            flash(f"Error reading CSVs: {e}", "danger")
+            return redirect(url_for("index"))
+            
+    elif input_type == 'manual':
+        # Handle manual input (single set of slider values with date and hour selection)
+        try:
+            # Get slider values
+            wind_speed = float(request.form.get('manual_wind_speed', 5.5))
+            wind_dir = float(request.form.get('manual_wind_dir', 180))
+            pressure = float(request.form.get('manual_pressure', 1013))
+            air_temp = float(request.form.get('manual_air_temp', 20))
+            demand_temp = float(request.form.get('manual_temp', 20))
+            humidity = float(request.form.get('manual_humidity', 65))
+            selected_date = request.form.get('manual_date')
+            selected_hour = int(request.form.get('manual_hour', 12))
+            
+            if not selected_date:
+                flash("Please select a date", "danger")
+                return redirect(url_for("index"))
+            
+            # Parse the selected date and add the selected hour
+            selected_datetime = pd.to_datetime(selected_date) + pd.Timedelta(hours=selected_hour)
+            
+            # Create single entry for the selected hour
+            wind_data = [{
+                'Wind Speed': wind_speed,
+                'Wind Direction': wind_dir,
+                'Pressure': pressure,
+                'Air Temperature': air_temp,
+            }]
+
+            demand_data = [{
+                'Temperature': demand_temp,
+                'Humidity': humidity,
+                'Timestamp': selected_datetime
+            }]
+
+            # Convert to DataFrames
+            wind_df = pd.DataFrame(wind_data)
+            demand_df = pd.DataFrame(demand_data)
+
+            # Store selected datetime for later use
+            request.selected_datetime = selected_datetime
+            request.selected_hour = selected_hour
+                
+        except Exception as e:
+            flash(f"Error processing manual input: {str(e)}", "danger")
+            print(f"Manual input error: {e}")
+            return redirect(url_for("index"))
+    else:
+        flash("Invalid input type", "danger")
         return redirect(url_for("index"))
 
     # Basic column normalization: replace spaces with underscores and lowercase
@@ -255,6 +308,100 @@ def predict():
             "forecast_end": forecast_timestamps[-1].isoformat()
         }, fh, default=str)
 
+    # If manual input, show comparison page with predicted vs actual for single hour
+    if input_type == 'manual':
+        # Get the specific hour's data
+        wind_predicted = [wind_forecast[0]]  # Just the first (and only) prediction
+        demand_predicted = [demand_forecast[0]]  # Just the first (and only) prediction
+        
+        wind_actual = [0]  # Default value
+        demand_actual = [0]  # Default value
+        
+        selected_datetime = request.selected_datetime if hasattr(request, 'selected_datetime') else datetime.now()
+        
+        # Load wind actual data for the specific hour
+        try:
+            wind_data_path = os.path.join(DATA_FOLDER, "Wind data_texas.csv")
+            if os.path.exists(wind_data_path):
+                wind_actual_df = pd.read_csv(wind_data_path)
+                # Parse timestamp - handle format like "Jan 1, 12:00 am"
+                wind_actual_df['Timestamp'] = pd.to_datetime(wind_actual_df['Timestamp'], format='%b %d, %I:%M %p', errors='coerce')
+                
+                # Find the closest timestamp to our selected datetime
+                time_diff = (wind_actual_df['Timestamp'] - selected_datetime).abs()
+                closest_idx = time_diff.idxmin()
+                wind_actual = [wind_actual_df.loc[closest_idx, 'windfarm power']]
+        except Exception as e:
+            print(f"Error loading wind actual data: {e}")
+            wind_actual = wind_predicted
+        
+        # Load demand actual data for the specific hour
+        try:
+            demand_data_path = os.path.join(DATA_FOLDER, "demand_data_texas.csv")
+            if os.path.exists(demand_data_path):
+                demand_actual_df = pd.read_csv(demand_data_path)
+                # Parse timestamp - format like "01-Jan-20"
+                demand_actual_df['Timestamp'] = pd.to_datetime(demand_actual_df['Timestamp'], format='%d-%b-%y', errors='coerce')
+                
+                # Find the closest timestamp to our selected datetime
+                time_diff = (demand_actual_df['Timestamp'] - selected_datetime).abs()
+                closest_idx = time_diff.idxmin()
+                demand_actual = [demand_actual_df.loc[closest_idx, 'Demand']]
+        except Exception as e:
+            print(f"Error loading demand actual data: {e}")
+            demand_actual = demand_predicted
+        
+        # Calculate error metrics
+        def calculate_mape(actual, predicted):
+            """Calculate Mean Absolute Percentage Error"""
+            if len(actual) == 0:
+                return 0
+            errors = []
+            for a, p in zip(actual, predicted):
+                if a != 0:
+                    errors.append(abs((a - p) / a) * 100)
+            return sum(errors) / len(errors) if errors else 0
+        
+        def calculate_errors(actual, predicted):
+            """Calculate percentage errors for each hour"""
+            errors = []
+            for a, p in zip(actual, predicted):
+                if a != 0:
+                    errors.append(abs((a - p) / a) * 100)
+                else:
+                    errors.append(0)
+            return errors
+        
+        wind_errors = calculate_errors(wind_actual, wind_predicted)
+        demand_errors = calculate_errors(demand_actual, demand_predicted)
+        
+        wind_mape = calculate_mape(wind_actual, wind_predicted)
+        demand_mape = calculate_mape(demand_actual, demand_predicted)
+        
+        wind_pred_avg = sum(wind_predicted) / len(wind_predicted) if wind_predicted else 0
+        wind_actual_avg = sum(wind_actual) / len(wind_actual) if wind_actual else 0
+        wind_diff = wind_pred_avg - wind_actual_avg
+        
+        demand_pred_avg = sum(demand_predicted) / len(demand_predicted) if demand_predicted else 0
+        demand_actual_avg = sum(demand_actual) / len(demand_actual) if demand_actual else 0
+        demand_diff = demand_pred_avg - demand_actual_avg
+        
+        return render_template(
+            "manual_results.html",
+            selected_datetime=selected_datetime,
+            now=datetime.now(),
+            wind_speed=request.form.get('manual_wind_speed', 5.5),
+            wind_dir=request.form.get('manual_wind_dir', 180),
+            pressure=request.form.get('manual_pressure', 1013),
+            air_temp=request.form.get('manual_air_temp', 20),
+            demand_temp=request.form.get('manual_temp', 20),
+            humidity=request.form.get('manual_humidity', 65),
+            wind_predicted=wind_predicted,
+            wind_actual=wind_actual,
+            demand_predicted=demand_predicted,
+            demand_actual=demand_actual
+        )
+    
     return render_template("results.html", results=results)
 
 @app.route("/analysis")
