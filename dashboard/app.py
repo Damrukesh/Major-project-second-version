@@ -20,7 +20,7 @@ DATA_FOLDER = os.path.join(os.path.dirname(BASE_DIR), "datasets")
 # Load Texas energy portfolio data
 def load_texas_energy_data():
     try:
-        texas_data = pd.read_csv(os.path.join(DATA_FOLDER, "texas_energy_portfolio.csv"))
+        texas_data = pd.read_csv(os.path.join(DATA_FOLDER, "final_portfolio.csv"))
         texas_data['Timestamp'] = pd.to_datetime(texas_data['Timestamp'])
         return texas_data
     except Exception as e:
@@ -450,6 +450,46 @@ def analysis():
     hydro_forecast = [r.get("hydro_mw", 0) for r in results]
     nuclear_forecast = [r.get("nuclear_mw", 0) for r in results]
     
+    # Prepare data for the new fossil fuel comparison graphs
+    # Graph 1: Predicted vs Needed - Purple (predicted) vs Blue (actually needed)
+    # Graph 2: Production vs Needed - Green (actual production) vs Blue (actually needed)
+    
+    # Get predicted fossil fuels from the forecast results (just fossil, not including nuclear)
+    fossil_predicted = [r["fossil_needed_mw"] for r in results]
+    
+    # Get actual data from the final_portfolio dataset for the same time period
+    fossil_actual_needed = []
+    fossil_actual_production = []
+    
+    if texas_data is not None and forecast_start:
+        forecast_end = forecast_start + timedelta(hours=23)
+        actual_data = texas_data[
+            (texas_data['Timestamp'] >= forecast_start) & 
+            (texas_data['Timestamp'] <= forecast_end)
+        ]
+        
+        if not actual_data.empty and len(actual_data) >= 24:
+            actual_data = actual_data.iloc[:24]
+            # Extract Fossil_Actual_MW and Fossil_MW from the dataset
+            fossil_actual_needed = actual_data['Fossil_Actual_MW'].tolist()
+            fossil_actual_production = actual_data['Fossil_MW'].tolist()
+            print(f"Loaded fossil fuel data: {len(fossil_actual_needed)} hours")
+        else:
+            # Fallback: use hourly averages from the entire dataset
+            for i in range(24):
+                hour_data = texas_data[texas_data['Timestamp'].dt.hour == i]
+                if not hour_data.empty:
+                    fossil_actual_needed.append(hour_data['Fossil_Actual_MW'].mean())
+                    fossil_actual_production.append(hour_data['Fossil_MW'].mean())
+                else:
+                    fossil_actual_needed.append(0)
+                    fossil_actual_production.append(0)
+            print(f"Using average hourly fossil fuel data from dataset")
+    else:
+        # Fallback to zeros if no data available
+        fossil_actual_needed = [0] * 24
+        fossil_actual_production = [0] * 24
+    
     return render_template(
         "analysis.html",
         timestamps=timestamps,
@@ -462,7 +502,63 @@ def analysis():
         energy_saved=energy_saved,
         total_energy_saved_mwh=total_energy_saved_mwh,
         co2_saved_kg=co2_saved_kg,
-        recs=recs
+        recs=recs,
+        fossil_predicted=fossil_predicted,
+        fossil_actual_needed=fossil_actual_needed,
+        fossil_actual_production=fossil_actual_production
+    )
+
+@app.route("/savings_detail")
+def savings_detail():
+    out_json_path = os.path.join(UPLOAD_FOLDER, "latest_results.json")
+    if not os.path.exists(out_json_path):
+        flash("No results available. Please upload CSVs and run prediction first.", "warning")
+        return redirect(url_for("index"))
+    
+    with open(out_json_path) as fh:
+        data = json.load(fh)
+    
+    results = data["results"]
+    
+    # Calculate hourly CO2 savings and RECs
+    hourly_data = []
+    co2_hourly = []
+    recs_hourly = []
+    
+    for r in results:
+        # CO2 savings: assuming 0.95 kg CO2 per kWh saved
+        # Energy saved = renewable energy used (wind + solar + hydro)
+        renewable_energy = r.get("wind_mw", 0) + r.get("solar_mw", 0) + r.get("hydro_mw", 0)
+        co2_saved = renewable_energy * 0.95  # kg CO2 per MWh
+        
+        # RECs = renewable energy in MWh
+        recs = renewable_energy
+        
+        hourly_data.append({
+            "hour": r["hour"],
+            "timestamp": r.get("timestamp", f"Hour {r['hour']}"),
+            "co2_saved": co2_saved,
+            "recs": recs
+        })
+        
+        co2_hourly.append(co2_saved)
+        recs_hourly.append(recs)
+    
+    # Calculate totals
+    total_co2_saved = sum(co2_hourly)
+    total_recs = sum(recs_hourly)
+    
+    # Prepare timestamps for charts
+    timestamps = [r.get("timestamp", f"Hour {r['hour']}") for r in results]
+    
+    return render_template(
+        "savings_detail.html",
+        hourly_data=hourly_data,
+        co2_hourly=co2_hourly,
+        recs_hourly=recs_hourly,
+        total_co2_saved=total_co2_saved,
+        total_recs=total_recs,
+        timestamps=timestamps
     )
 
 @app.route("/download_results")
