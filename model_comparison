@@ -1,0 +1,39 @@
+from sklearn.metrics import r2_score,mean_squared_error
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor,ExtraTreesRegressor,AdaBoostRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeRegressor
+from xgboost import XGBRegressor,XGBRFRegressor
+from sklearn.model_selection import RandomizedSearchCV
+from catboost import CatBoostRegressor
+model_name=[]
+r2score=[]
+rmse=[]
+models=[
+    GradientBoostingRegressor(random_state=42),
+    SVR(),
+    RandomForestRegressor(random_state=42),
+    LinearRegression(),
+    ExtraTreesRegressor(random_state=42),
+    AdaBoostRegressor(random_state=42),
+    DecisionTreeRegressor(random_state=42),
+    XGBRegressor(random_state=42),
+    XGBRFRegressor(random_state=42),
+    CatBoostRegressor(random_state=42,verbose=False)
+]
+for model in models:
+    model.fit(X_1_train_f1 , y_train)
+    y_pred = model.predict(X_1_test_f1)
+    model_name.append(model.__class__.__name__)
+    r2score.append(str(r2_score( y_test , y_pred ) * 100 ))
+    rmse.append(str(mean_squared_error( y_test , y_pred,squared=False )))
+models_df = pd.DataFrame({"Model-Name":model_name, "R2_score": r2score ,'RMSE':rmse})
+models_df = models_df.astype({"R2_score": float, "RMSE": float})
+models_df.sort_values("R2_score", ascending = False)
+plt.figure(figsize=(8,6))
+sns.pointplot(x='Model-Name',y='R2_score',data=models_df)
+plt.xticks(rotation=90)
+plt.title('Model Comparison: R2 Score')
+plt.tight_layout()
+plt.show()
