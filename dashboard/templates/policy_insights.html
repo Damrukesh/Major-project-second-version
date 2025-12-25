@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Policy Insights & Recommendations</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            background-color: #12161a;
+            background-image: url("{{ url_for('static', filename='image.png') }}");
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            color: #e0e0e0;
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+        }
+
+        .hero {
+            background: transparent;
+            color: #fff;
+            padding: 32px 0 20px 0;
+            text-align: center;
+        }
+
+        .insights-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+
+        .insight-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            border-left: 4px solid;
+        }
+
+        .insight-card.high {
+            border-left-color: #e74c3c;
+        }
+
+        .insight-card.medium {
+            border-left-color: #f39c12;
+        }
+
+        .insight-card.low {
+            border-left-color: #3498db;
+        }
+
+        .insight-card .type {
+            font-size: 12px;
+            text-transform: uppercase;
+            font-weight: 600;
+            color: #7f8c8d;
+            margin-bottom: 8px;
+        }
+
+        .insight-card .message {
+            font-size: 15px;
+            color: #2c3e50;
+            line-height: 1.6;
+        }
+
+        .insight-card .priority {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+
+        .priority.high {
+            background: #fee;
+            color: #e74c3c;
+        }
+
+        .priority.medium {
+            background: #fef5e7;
+            color: #f39c12;
+        }
+
+        .chart-container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .chart-container h3 {
+            margin-top: 0;
+            color: #2c3e50;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+
+        .actions {
+            display: flex;
+            justify-content: space-between;
+            margin: 30px 0;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+
+        .btn:hover {
+            background-color: #2980b9;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="hero small">
+        <h1>Policy Insights & Recommendations</h1>
+        <p>Data-driven strategies for optimal energy management</p>
+    </div>
+
+    <main class="container">
+        <h2 style="color: #3498db; margin-bottom: 20px;">Automatic Insights</h2>
+
+        <div class="insights-grid">
+            {% for insight in insights %}
+            <div class="insight-card {{ insight.priority }}">
+                <div class="type">{{ insight.type.replace('_', ' ').title() }}</div>
+                <div class="message">{{ insight.message }}</div>
+                <span class="priority {{ insight.priority }}">{{ insight.priority.upper() }} PRIORITY</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="chart-container">
+            <h3>Hourly Energy Pattern Analysis</h3>
+            <canvas id="policyChart"></canvas>
+        </div>
+
+        <div class="chart-container">
+            <h3>Excess Renewable Energy by Hour (Storage Opportunities)</h3>
+            <canvas id="excessChart"></canvas>
+        </div>
+
+        <div class="actions">
+            <a class="btn" href="{{ url_for('savings_detail') }}">← Back to Savings</a>
+            <a class="btn" href="{{ url_for('index') }}">New Prediction</a>
+        </div>
+    </main>
+
+    <script>
+        // Policy Chart - Demand vs Renewable vs Fossil
+        const policyCtx = document.getElementById('policyChart').getContext('2d');
+        const policyChart = new Chart(policyCtx, {
+            type: 'line',
+            data: {
+                labels: {{ policy_data.hours | tojson }},
+        datasets: [{
+            label: 'Avg Demand',
+            data: {{ policy_data.avg_demand | tojson }},
+            borderColor: 'rgba(231, 76, 60, 0.8)',
+            backgroundColor: 'rgba(231, 76, 60, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true
+        }, {
+            label: 'Avg Wind',
+            data: {{ policy_data.avg_wind | tojson }},
+            borderColor: 'rgba(52, 152, 219, 0.8)',
+            backgroundColor: 'rgba(52, 152, 219, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true
+        }, {
+            label: 'Avg Solar',
+            data: {{ policy_data.avg_solar | tojson }},
+            borderColor: 'rgba(241, 196, 15, 0.8)',
+            backgroundColor: 'rgba(241, 196, 15, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true
+        }, {
+            label: 'Avg Fossil Needed',
+            data: {{ policy_data.avg_fossil_needed | tojson }},
+            borderColor: 'rgba(149, 165, 166, 0.8)',
+            backgroundColor: 'rgba(149, 165, 166, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true
+        }]
+      },
+        options: {
+            responsive: true,
+                maintainAspectRatio: true,
+                    plugins: {
+                legend: {
+                    position: 'top'
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return context.dataset.label + ': ' + context.parsed.y.toFixed(0) + ' MW';
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                        title: {
+                        display: true,
+                            text: 'Power (MW)'
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                            text: 'Hour of Day'
+                    }
+                }
+            }
+        }
+    });
+
+        // Excess Renewable Chart
+        const excessCtx = document.getElementById('excessChart').getContext('2d');
+        const excessChart = new Chart(excessCtx, {
+            type: 'bar',
+            data: {
+                labels: {{ policy_data.hours | tojson }},
+        datasets: [{
+            label: 'Excess Renewable Energy',
+            data: {{ policy_data.excess_renewable | tojson }},
+            backgroundColor: function (context) {
+                const value = context.parsed.y;
+                return value > 0 ? 'rgba(46, 204, 113, 0.7)' : 'rgba(231, 76, 60, 0.7)';
+            },
+            borderColor: function (context) {
+                const value = context.parsed.y;
+                return value > 0 ? 'rgba(46, 204, 113, 1)' : 'rgba(231, 76, 60, 1)';
+            },
+            borderWidth: 1
+        }]
+      },
+        options: {
+            responsive: true,
+                maintainAspectRatio: true,
+                    plugins: {
+                legend: {
+                    position: 'top'
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const value = context.parsed.y;
+                            return value > 0
+                                ? 'Excess: ' + value.toFixed(0) + ' MW (Storage Opportunity)'
+                                : 'Deficit: ' + Math.abs(value).toFixed(0) + ' MW';
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    title: {
+                        display: true,
+                            text: 'Excess/Deficit (MW)'
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                            text: 'Hour of Day'
+                    }
+                }
+            }
+        }
+    });
+    </script>
+</body>
+
+</html>

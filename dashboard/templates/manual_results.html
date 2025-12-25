@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wind & Demand Prediction Comparison</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --primary: #1a73e8;
@@ -41,7 +42,7 @@
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
             padding: 20px;
         }
@@ -68,104 +69,26 @@
             margin-bottom: 0;
         }
 
-        .comparison-container {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-
-        .comparison-card {
+        .chart-container {
             background: var(--dark-secondary);
             border-radius: 10px;
             padding: 25px;
             margin-bottom: 25px;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
             border: 1px solid var(--border);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
 
-        .comparison-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
-        }
-
-        .comparison-card h3 {
+        .chart-container h3 {
             margin-top: 0;
             color: var(--primary);
             border-bottom: 1px solid var(--border);
             padding-bottom: 12px;
             margin-bottom: 20px;
             font-size: 1.4rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
         }
 
-        .comparison-card h3 .icon {
-            font-size: 1.2em;
-        }
-
-        .comparison-row {
-            display: flex;
-            justify-content: space-between;
-            gap: 20px;
-            margin-bottom: 15px;
-        }
-
-        .comparison-value {
-            flex: 1;
-            padding: 20px;
-            border-radius: 8px;
-            text-align: center;
-            transition: all 0.3s ease;
-        }
-
-        .comparison-value:hover {
-            transform: translateY(-2px);
-        }
-
-        .comparison-value .label {
-            display: block;
-            font-size: 14px;
-            color: var(--text-secondary);
-            margin-bottom: 8px;
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .comparison-value .value {
-            font-size: 28px;
-            font-weight: 700;
-            margin: 5px 0;
-        }
-
-        .comparison-value .unit {
-            font-size: 14px;
-            opacity: 0.8;
-            margin-left: 2px;
-        }
-
-        .predicted {
-            background: rgba(26, 115, 232, 0.08);
-            border: 1px solid rgba(26, 115, 232, 0.3);
-        }
-
-        .actual {
-            background: rgba(255, 152, 0, 0.08);
-            border: 1px solid rgba(255, 152, 0, 0.3);
-        }
-
-        .difference {
-            background: rgba(76, 175, 80, 0.08);
-            border: 1px solid rgba(76, 175, 80, 0.3);
-        }
-
-        .difference .value.negative {
-            color: var(--danger);
-        }
-
-        .difference .value.positive {
-            color: var(--success);
+        .chart-container canvas {
+            max-height: 400px;
         }
 
         .input-params {
@@ -173,7 +96,7 @@
             border-radius: 10px;
             padding: 25px;
             margin: 40px auto;
-            max-width: 900px;
+            max-width: 1400px;
             border: 1px solid var(--border);
         }
 
@@ -184,9 +107,6 @@
             padding-bottom: 12px;
             margin-bottom: 20px;
             font-size: 1.4rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
         }
 
         .params-grid {
@@ -200,12 +120,6 @@
             padding: 15px;
             border-radius: 8px;
             border-left: 4px solid var(--primary);
-            transition: all 0.3s ease;
-        }
-
-        .param-item:hover {
-            transform: translateX(5px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
         }
 
         .param-label {
@@ -251,14 +165,6 @@
             box-shadow: 0 4px 15px rgba(26, 115, 232, 0.4);
         }
 
-        .btn:active {
-            transform: translateY(0);
-        }
-
-        .btn i {
-            font-size: 16px;
-        }
-
         .timestamp {
             text-align: center;
             color: var(--text-secondary);
@@ -267,21 +173,12 @@
         }
 
         @media (max-width: 768px) {
-            .comparison-row {
-                flex-direction: column;
-                gap: 15px;
-            }
-
-            .params-grid {
-                grid-template-columns: 1fr;
-            }
-
             .hero h1 {
                 font-size: 1.8rem;
             }
 
-            .hero {
-                padding: 20px 15px;
+            .params-grid {
+                grid-template-columns: 1fr;
             }
         }
     </style>
@@ -291,71 +188,23 @@
     <div class="container">
         <div class="hero">
             <h1>Wind & Demand Prediction Comparison</h1>
-            <p>{{ selected_datetime.strftime('%A, %B %d, %Y at %H:00') }}</p>
+            <p>{{ selected_datetime.strftime('%A, %B %d, %Y') }} - 24 Hour Analysis</p>
         </div>
 
-        <div class="comparison-container">
-            <!-- Wind Power Comparison -->
-            <div class="comparison-card">
-                <h3><i class="icon">💨</i> Wind Power</h3>
-                <div class="comparison-row">
-                    <div class="comparison-value predicted">
-                        <span class="label">Predicted</span>
-                        <div class="value">{{ "%.2f"|format(wind_predicted[0]) }}<span class="unit">MW</span></div>
-                    </div>
-                    <div class="comparison-value actual">
-                        <span class="label">Actual</span>
-                        <div class="value">{{ "%.2f"|format(wind_actual[0]) }}<span class="unit">MW</span></div>
-                    </div>
-                    <div class="comparison-value difference">
-                        <span class="label">Difference</span>
-                        <div
-                            class="value {% if (wind_predicted[0] - wind_actual[0]) >= 0 %}positive{% else %}negative{% endif %}">
-                            {{ "%+.2f"|format(wind_predicted[0] - wind_actual[0]) }}<span class="unit">MW</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="error-metric"
-                    style="margin-top: 15px; text-align: center; color: var(--text-secondary); font-size: 14px;">
-                    {% set error_pct = ((wind_predicted[0] - wind_actual[0]) / wind_actual[0] * 100) if wind_actual[0]
-                    != 0 else 0 %}
-                    <span>Error: {{ "%.2f"|format(error_pct|abs) }}% {{ "over" if error_pct > 0 else "under" }}
-                        actual</span>
-                </div>
-            </div>
+        <!-- Wind Power Chart -->
+        <div class="chart-container">
+            <h3>💨 Wind Power: Predicted vs Actual</h3>
+            <canvas id="windChart"></canvas>
+        </div>
 
-            <!-- Demand Comparison -->
-            <div class="comparison-card">
-                <h3><i class="icon">⚡</i> Energy Demand</h3>
-                <div class="comparison-row">
-                    <div class="comparison-value predicted">
-                        <span class="label">Predicted</span>
-                        <div class="value">{{ "%.2f"|format(demand_predicted[0]) }}<span class="unit">MW</span></div>
-                    </div>
-                    <div class="comparison-value actual">
-                        <span class="label">Actual</span>
-                        <div class="value">{{ "%.2f"|format(demand_actual[0]) }}<span class="unit">MW</span></div>
-                    </div>
-                    <div class="comparison-value difference">
-                        <span class="label">Difference</span>
-                        <div
-                            class="value {% if (demand_predicted[0] - demand_actual[0]) >= 0 %}positive{% else %}negative{% endif %}">
-                            {{ "%+.2f"|format(demand_predicted[0] - demand_actual[0]) }}<span class="unit">MW</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="error-metric"
-                    style="margin-top: 15px; text-align: center; color: var(--text-secondary); font-size: 14px;">
-                    {% set error_pct = ((demand_predicted[0] - demand_actual[0]) / demand_actual[0] * 100) if
-                    demand_actual[0] != 0 else 0 %}
-                    <span>Error: {{ "%.2f"|format(error_pct|abs) }}% {{ "over" if error_pct > 0 else "under" }}
-                        actual</span>
-                </div>
-            </div>
+        <!-- Demand Chart -->
+        <div class="chart-container">
+            <h3>⚡ Energy Demand: Predicted vs Actual</h3>
+            <canvas id="demandChart"></canvas>
         </div>
 
         <div class="input-params">
-            <h3><i class="icon">⚙️</i> Input Parameters</h3>
+            <h3>⚙️ Input Parameters</h3>
             <div class="params-grid">
                 <div class="param-item">
                     <span class="param-label">Wind Speed</span>
@@ -386,7 +235,7 @@
 
         <div class="back-button">
             <a href="{{ url_for('index') }}" class="btn">
-                <i>←</i> Back to Input
+                ← Back to Input
             </a>
         </div>
 
@@ -394,6 +243,156 @@
             <p>Results generated on {{ now.strftime('%Y-%m-%d %H:%M:%S') }}</p>
         </div>
     </div>
+
+    <script>
+        // Wind Power Chart
+        const windCtx = document.getElementById('windChart').getContext('2d');
+        const windChart = new Chart(windCtx, {
+            type: 'line',
+            data: {
+                labels: {{ timestamps| tojson }},
+        datasets: [{
+            label: 'Predicted Wind Power',
+            data: {{ wind_predicted| tojson }},
+            borderColor: 'rgba(26, 115, 232, 0.9)',
+            backgroundColor: 'rgba(26, 115, 232, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true
+                }, {
+            label: 'Actual Wind Power',
+            data: {{ wind_actual| tojson }},
+            borderColor: 'rgba(255, 152, 0, 0.9)',
+            backgroundColor: 'rgba(255, 152, 0, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true
+                }]
+            },
+        options: {
+            responsive: true,
+                maintainAspectRatio: true,
+                    plugins: {
+                legend: {
+                    position: 'top',
+                        labels: {
+                        color: '#e2e8f0'
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return context.dataset.label + ': ' + context.parsed.y.toFixed(2) + ' MW';
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                        title: {
+                        display: true,
+                            text: 'Power (MW)',
+                                color: '#a0aec0'
+                    },
+                    ticks: {
+                        color: '#a0aec0'
+                    },
+                    grid: {
+                        color: '#3a4045'
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                            text: 'Hour',
+                                color: '#a0aec0'
+                    },
+                    ticks: {
+                        color: '#a0aec0'
+                    },
+                    grid: {
+                        color: '#3a4045'
+                    }
+                }
+            }
+        }
+        });
+
+        // Demand Chart
+        const demandCtx = document.getElementById('demandChart').getContext('2d');
+        const demandChart = new Chart(demandCtx, {
+            type: 'line',
+            data: {
+                labels: {{ timestamps| tojson }},
+        datasets: [{
+            label: 'Predicted Demand',
+            data: {{ demand_predicted| tojson }},
+            borderColor: 'rgba(26, 115, 232, 0.9)',
+            backgroundColor: 'rgba(26, 115, 232, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true
+                }, {
+            label: 'Actual Demand',
+            data: {{ demand_actual| tojson }},
+            borderColor: 'rgba(255, 152, 0, 0.9)',
+            backgroundColor: 'rgba(255, 152, 0, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true
+                }]
+            },
+        options: {
+            responsive: true,
+                maintainAspectRatio: true,
+                    plugins: {
+                legend: {
+                    position: 'top',
+                        labels: {
+                        color: '#e2e8f0'
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return context.dataset.label + ': ' + context.parsed.y.toFixed(2) + ' MW';
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                        title: {
+                        display: true,
+                            text: 'Demand (MW)',
+                                color: '#a0aec0'
+                    },
+                    ticks: {
+                        color: '#a0aec0'
+                    },
+                    grid: {
+                        color: '#3a4045'
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                            text: 'Hour',
+                                color: '#a0aec0'
+                    },
+                    ticks: {
+                        color: '#a0aec0'
+                    },
+                    grid: {
+                        color: '#3a4045'
+                    }
+                }
+            }
+        }
+        });
+    </script>
 </body>
 
 </html>

@@ -170,6 +170,9 @@ def predict():
         wind_model_path = os.path.join(os.path.dirname(BASE_DIR), "wind forecast", "wind_forecast_model.pkl")
         wind_scaler_path = os.path.join(os.path.dirname(BASE_DIR), "wind forecast", "scaler.pkl")
         
+        print(f"Looking for wind model at: {wind_model_path}")
+        print(f"Wind model exists: {os.path.exists(wind_model_path)}")
+        
         if os.path.exists(wind_model_path) and os.path.exists(wind_scaler_path):
             with open(wind_model_path, 'rb') as f:
                 wind_model = pickle.load(f)
@@ -190,6 +193,9 @@ def predict():
                     last_row = wind_input[-1]
                     wind_input = np.vstack([wind_input] + [last_row] * (24 - len(wind_input)))
                 
+                print(f"Wind input shape: {wind_input.shape}")
+                print(f"Wind input sample: {wind_input[0]}")
+                
                 # Scale features
                 wind_input_scaled = wind_scaler.transform(wind_input)
                 
@@ -201,18 +207,36 @@ def predict():
             else:
                 missing = [col for col in required_wind_cols if col not in wind_df.columns]
                 print(f"Missing wind columns: {missing}")
+                print(f"Available columns: {list(wind_df.columns)}")
                 raise ValueError(f"Missing required wind columns: {missing}")
         else:
-            # Fallback: Use the last available wind value
-            last_wind = wind_df.iloc[-1]['wind_speed'] if 'wind_speed' in wind_df.columns else 100
-            wind_forecast = [float(last_wind)] * forecast_hours
+            print(f"Wind model files not found!")
+            print(f"Model path: {wind_model_path}")
+            print(f"Scaler path: {wind_scaler_path}")
+            # Fallback: Use the last available wind value or a reasonable estimate
+            if 'wind_speed' in wind_df.columns:
+                # Simple power curve approximation: P = 0.5 * ρ * A * v^3 * efficiency
+                # Simplified: P ≈ wind_speed^2 * 10 (rough approximation)
+                wind_speeds = wind_df['wind_speed'].values
+                wind_forecast = [float(min(max(ws**2 * 10, 0), 3000)) for ws in wind_speeds[:24]]
+                print(f"Using wind speed approximation: {wind_forecast[:3]}...")
+            else:
+                last_wind = 100
+                wind_forecast = [float(last_wind)] * forecast_hours
             
     except Exception as e:
         print(f"Wind prediction error: {e}")
         import traceback
         traceback.print_exc()
-        # Fallback: Use a default value
-        wind_forecast = [100.0] * forecast_hours
+        # Fallback: Use wind speed approximation if available
+        if 'wind_speed' in wind_df.columns:
+            wind_speeds = wind_df['wind_speed'].values
+            # Simple power curve: higher wind speed = more power (cubic relationship)
+            wind_forecast = [float(min(max(ws**2 * 10, 0), 3000)) for ws in wind_speeds[:24]]
+            print(f"Using fallback wind speed approximation")
+        else:
+            wind_forecast = [100.0] * forecast_hours
+            print(f"Using default 100 MW fallback")
     
     # 2. DEMAND PREDICTION
     try:
@@ -318,45 +342,62 @@ def predict():
     if input_type == 'manual':
         # Get the specific hour's prediction from the 24-hour forecast
         selected_hour = request.selected_hour if hasattr(request, 'selected_hour') else 12
-        wind_predicted = [wind_forecast[selected_hour]]  # Get the specific hour's prediction
-        demand_predicted = [demand_forecast[selected_hour]]  # Get the specific hour's prediction
-        
-        wind_actual = [0]  # Default value
-        demand_actual = [0]  # Default value
-        
         selected_datetime = request.selected_datetime if hasattr(request, 'selected_datetime') else datetime.now()
         
-        # Load wind actual data for the specific hour
-        try:
-            wind_data_path = os.path.join(DATA_FOLDER, "Wind data_texas.csv")
-            if os.path.exists(wind_data_path):
-                wind_actual_df = pd.read_csv(wind_data_path)
-                # Parse timestamp - handle format like "Jan 1, 12:00 am"
-                wind_actual_df['Timestamp'] = pd.to_datetime(wind_actual_df['Timestamp'], format='%b %d, %I:%M %p', errors='coerce')
-                
-                # Find the closest timestamp to our selected datetime
-                time_diff = (wind_actual_df['Timestamp'] - selected_datetime).abs()
-                closest_idx = time_diff.idxmin()
-                wind_actual = [wind_actual_df.loc[closest_idx, 'windfarm power']]
-        except Exception as e:
-            print(f"Error loading wind actual data: {e}")
-            wind_actual = wind_predicted
+        # For manual entry, we want all 24 hours starting from the selected date at midnight
+        start_of_day = selected_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # Load demand actual data for the specific hour
+        # Get predictions for all 24 hours
+        wind_predicted = wind_forecast  # All 24 hours
+        demand_predicted = demand_forecast  # All 24 hours
+        
+        # Initialize actual values
+        wind_actual = [0] * 24
+        demand_actual = [0] * 24
+        
+        # Load actual data from final_portfolio.csv for all 24 hours
         try:
-            demand_data_path = os.path.join(DATA_FOLDER, "demand_data_texas.csv")
-            if os.path.exists(demand_data_path):
-                demand_actual_df = pd.read_csv(demand_data_path)
-                # Parse timestamp - format like "01-Jan-20"
-                demand_actual_df['Timestamp'] = pd.to_datetime(demand_actual_df['Timestamp'], format='%d-%b-%y', errors='coerce')
+            portfolio_path = os.path.join(DATA_FOLDER, "final_portfolio.csv")
+            if os.path.exists(portfolio_path):
+                portfolio_df = pd.read_csv(portfolio_path)
+                portfolio_df['Timestamp'] = pd.to_datetime(portfolio_df['Timestamp'])
                 
-                # Find the closest timestamp to our selected datetime
-                time_diff = (demand_actual_df['Timestamp'] - selected_datetime).abs()
-                closest_idx = time_diff.idxmin()
-                demand_actual = [demand_actual_df.loc[closest_idx, 'Demand']]
+                # Extract 24 hours of actual data starting from start_of_day
+                end_of_day = start_of_day + timedelta(hours=23)
+                
+                # Filter data for the selected day
+                day_data = portfolio_df[
+                    (portfolio_df['Timestamp'] >= start_of_day) & 
+                    (portfolio_df['Timestamp'] <= end_of_day)
+                ]
+                
+                if not day_data.empty and len(day_data) >= 24:
+                    # Use the first 24 hours
+                    day_data = day_data.iloc[:24]
+                    wind_actual = day_data['Wind_MW'].tolist()
+                    demand_actual = day_data['Demand_MW'].tolist()
+                    print(f"Loaded 24-hour actual data for {start_of_day.date()}")
+                else:
+                    # If exact day not found, try to find data for the same hour pattern
+                    print(f"No exact match for {start_of_day.date()}, using hourly averages")
+                    for hour in range(24):
+                        hour_data = portfolio_df[portfolio_df['Timestamp'].dt.hour == hour]
+                        if not hour_data.empty:
+                            wind_actual[hour] = hour_data['Wind_MW'].mean()
+                            demand_actual[hour] = hour_data['Demand_MW'].mean()
+                        else:
+                            wind_actual[hour] = wind_predicted[hour]
+                            demand_actual[hour] = demand_predicted[hour]
         except Exception as e:
-            print(f"Error loading demand actual data: {e}")
+            print(f"Error loading actual data from final_portfolio: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback to predicted values
+            wind_actual = wind_predicted
             demand_actual = demand_predicted
+        
+        # Generate timestamps for the 24 hours
+        timestamps = [(start_of_day + timedelta(hours=i)).strftime('%H:00') for i in range(24)]
         
         return render_template(
             "manual_results.html",
@@ -371,7 +412,8 @@ def predict():
             wind_predicted=wind_predicted,
             wind_actual=wind_actual,
             demand_predicted=demand_predicted,
-            demand_actual=demand_actual
+            demand_actual=demand_actual,
+            timestamps=timestamps
         )
     
     return render_template("results.html", results=results)
@@ -559,6 +601,115 @@ def savings_detail():
         total_co2_saved=total_co2_saved,
         total_recs=total_recs,
         timestamps=timestamps
+    )
+
+@app.route("/policy_insights")
+def policy_insights():
+    # Load historical data from final_portfolio
+    texas_data = load_texas_energy_data()
+    
+    if texas_data is None:
+        flash("Error loading data for policy analysis.", "danger")
+        return redirect(url_for("index"))
+    
+    # Policy Analytics Engine
+    insights = []
+    policy_data = {}
+    
+    # 1. Storage Timing Analysis
+    # Find hours with excess renewable energy (wind + solar + hydro > demand)
+    texas_data['Renewable_Total'] = texas_data['Wind_MW'] + texas_data['Solar_MW'] + texas_data['Hydro_MW']
+    texas_data['Excess_Renewable'] = texas_data['Renewable_Total'] - texas_data['Demand_MW']
+    texas_data['Fossil_Excess'] = texas_data['Fossil_MW'] - texas_data['Fossil_Actual_MW']
+    
+    # Group by hour of day to find patterns
+    hourly_stats = texas_data.groupby(texas_data['Timestamp'].dt.hour).agg({
+        'Excess_Renewable': 'mean',
+        'Fossil_Excess': 'mean',
+        'Wind_MW': 'mean',
+        'Solar_MW': 'mean',
+        'Demand_MW': 'mean',
+        'Fossil_MW': 'mean',
+        'Fossil_Actual_MW': 'mean'
+    }).reset_index()
+    hourly_stats.columns = ['Hour', 'Avg_Excess_Renewable', 'Avg_Fossil_Excess', 'Avg_Wind', 'Avg_Solar', 'Avg_Demand', 'Avg_Fossil_Production', 'Avg_Fossil_Needed']
+    
+    # Find peak excess renewable hours (storage opportunity)
+    storage_hours = hourly_stats[hourly_stats['Avg_Excess_Renewable'] > 0].sort_values('Avg_Excess_Renewable', ascending=False)
+    
+    if not storage_hours.empty:
+        top_storage_hour = storage_hours.iloc[0]
+        insights.append({
+            'type': 'storage',
+            'priority': 'high',
+            'message': f"Storage recommended between {int(top_storage_hour['Hour'])}:00–{int(top_storage_hour['Hour'])+2}:00 due to {top_storage_hour['Avg_Excess_Renewable']:.0f} MW average excess renewable energy."
+        })
+    
+    # Find hours with high fossil excess (overproduction)
+    fossil_excess_hours = hourly_stats[hourly_stats['Avg_Fossil_Excess'] > 50].sort_values('Avg_Fossil_Excess', ascending=False)
+    
+    if not fossil_excess_hours.empty:
+        top_excess_hour = fossil_excess_hours.iloc[0]
+        insights.append({
+            'type': 'fossil_reduction',
+            'priority': 'medium',
+            'message': f"Reduce thermal baseload minimum by {(top_excess_hour['Avg_Fossil_Excess'] / top_excess_hour['Avg_Fossil_Production'] * 100):.0f}% during hour {int(top_excess_hour['Hour'])} to avoid overproduction."
+        })
+    
+    # 2. Dispatch Priority Analysis
+    # Find hours with low wind but high demand (need better dispatch)
+    low_wind_high_demand = hourly_stats[
+        (hourly_stats['Avg_Wind'] < hourly_stats['Avg_Wind'].median()) & 
+        (hourly_stats['Avg_Demand'] > hourly_stats['Avg_Demand'].median())
+    ]
+    
+    if not low_wind_high_demand.empty:
+        critical_hours = low_wind_high_demand.sort_values('Avg_Demand', ascending=False).head(3)
+        hour_list = ', '.join([f"{int(h)}:00" for h in critical_hours['Hour'].values])
+        insights.append({
+            'type': 'dispatch',
+            'priority': 'high',
+            'message': f"Increase renewable dispatch priority during hours {hour_list} when wind is typically low but demand is high."
+        })
+    
+    # Find early morning hours (typically low demand, good for storage charging)
+    early_morning = hourly_stats[(hourly_stats['Hour'] >= 2) & (hourly_stats['Hour'] <= 6)]
+    if not early_morning.empty:
+        avg_demand_morning = early_morning['Avg_Demand'].mean()
+        avg_wind_morning = early_morning['Avg_Wind'].mean()
+        if avg_wind_morning > avg_demand_morning * 0.3:  # Wind provides 30%+ of demand
+            insights.append({
+                'type': 'dispatch',
+                'priority': 'medium',
+                'message': f"Increase renewable dispatch priority during early mornings (2AM–6AM) when wind averages {avg_wind_morning:.0f} MW."
+            })
+    
+    # 3. Peak Demand Management
+    peak_demand_hours = hourly_stats.nlargest(3, 'Avg_Demand')
+    peak_hours_str = ', '.join([f"{int(h)}:00" for h in peak_demand_hours['Hour'].values])
+    avg_peak_demand = peak_demand_hours['Avg_Demand'].mean()
+    avg_peak_fossil = peak_demand_hours['Avg_Fossil_Needed'].mean()
+    
+    insights.append({
+        'type': 'peak_management',
+        'priority': 'high',
+        'message': f"Peak demand hours ({peak_hours_str}) require {avg_peak_fossil:.0f} MW fossil fuel on average. Consider demand response programs."
+    })
+    
+    # Prepare data for charts
+    policy_data['hourly_stats'] = hourly_stats.to_dict('records')
+    policy_data['hours'] = hourly_stats['Hour'].tolist()
+    policy_data['excess_renewable'] = hourly_stats['Avg_Excess_Renewable'].tolist()
+    policy_data['fossil_excess'] = hourly_stats['Avg_Fossil_Excess'].tolist()
+    policy_data['avg_wind'] = hourly_stats['Avg_Wind'].tolist()
+    policy_data['avg_solar'] = hourly_stats['Avg_Solar'].tolist()
+    policy_data['avg_demand'] = hourly_stats['Avg_Demand'].tolist()
+    policy_data['avg_fossil_needed'] = hourly_stats['Avg_Fossil_Needed'].tolist()
+    
+    return render_template(
+        "policy_insights.html",
+        insights=insights,
+        policy_data=policy_data
     )
 
 @app.route("/download_results")
